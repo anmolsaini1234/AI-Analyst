@@ -243,7 +243,7 @@ router.post("/", async (req, res) => {
         // STEP 3 → SEND TO PYTHON
         const pythonResponse =
             await fetch(
-                "http://127.0.0.1:8000/analyze",
+                "https://ai-analyst-ebr8.onrender.com/analyze",
                 {
                     method: "POST",
 
