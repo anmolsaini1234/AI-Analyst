@@ -40,7 +40,7 @@ function App() {
             );
 
             const res = await fetch(
-                "http://localhost:5000/upload",
+                "https://ai-analyst-1-rqou.onrender.com/upload",
                 {
                     method: "POST",
                     body: formData
@@ -74,7 +74,7 @@ function App() {
             setLoading(true);
 
             const res = await fetch(
-                "http://localhost:5000/ask",
+                "https://ai-analyst-1-rqou.onrender.com/ask",
                 {
                     method: "POST",
 

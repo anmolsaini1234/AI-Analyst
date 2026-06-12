@@ -12,32 +12,54 @@ const {
 } = require("../services/fileStorage");
 
 
+// ==========================================
 // SUPPORTED OPERATIONS
+// ==========================================
+
 const SUPPORTED_OPERATIONS = [
+
     "trend_analysis",
+
     "max_value",
+
     "min_value",
+
     "average",
+
     "sum",
+
     "count",
+
     "top_n",
+
     "grouped_summary"
 ];
 
+
+// ==========================================
 // SUPPORTED CHARTS
+// ==========================================
+
 const SUPPORTED_CHARTS = [
+
     "line",
+
     "bar",
+
     "pie",
+
     "scatter",
+
     "kpi"
 ];
 
 
-// NORMALIZE AI PLAN
+// ==========================================
+// NORMALIZE PLAN
+// ==========================================
+
 function normalizePlan(plan) {
 
-    // DEFAULTS
     plan.limit =
         Number(plan.limit) || 10;
 
@@ -54,33 +76,11 @@ function normalizePlan(plan) {
         )
     ) {
 
-        // SMART FALLBACKS
+        plan.operation = "count";
 
-        // FILTER QUERY
-        if (
-            Object.keys(plan.filters || {})
-                .length > 0
-        ) {
+        plan.metric = "*";
 
-            if (plan.group_by) {
-
-                plan.operation = "count";
-                plan.metric = "*";
-                plan.chart_type = "bar";
-
-            } else {
-
-                plan.operation = "count";
-                plan.metric = "*";
-                plan.chart_type = "kpi";
-            }
-
-        } else {
-
-            plan.operation = "count";
-            plan.metric = "*";
-            plan.chart_type = "kpi";
-        }
+        plan.chart_type = "kpi";
     }
 
     // INVALID CHART TYPE
@@ -90,7 +90,6 @@ function normalizePlan(plan) {
         )
     ) {
 
-        // AUTO FIX
         if (
             plan.operation === "count"
             ||
@@ -141,7 +140,10 @@ function normalizePlan(plan) {
 }
 
 
+// ==========================================
 // ASK ROUTE
+// ==========================================
+
 router.post("/", async (req, res) => {
 
     try {
@@ -151,11 +153,16 @@ router.post("/", async (req, res) => {
             schema
         } = req.body;
 
+        // ==========================================
         // VALIDATION
+        // ==========================================
+
         if (!query) {
 
             return res.status(400).json({
-                error: "Query is required"
+
+                error:
+                "Query is required"
             });
         }
 
@@ -166,11 +173,16 @@ router.post("/", async (req, res) => {
         ) {
 
             return res.status(400).json({
-                error: "Invalid schema"
+
+                error:
+                "Invalid schema"
             });
         }
 
-        // STEP 1 → GENERATE AI PLAN
+        // ==========================================
+        // GENERATE AI PLAN
+        // ==========================================
+
         const rawResponse =
             await generateQueryPlan(
                 query,
@@ -182,7 +194,7 @@ router.post("/", async (req, res) => {
             rawResponse
         );
 
-        // REMOVE MARKDOWN
+        // CLEAN RESPONSE
         const cleanedResponse =
             rawResponse
                 .replace(/```json/g, "")
@@ -191,7 +203,6 @@ router.post("/", async (req, res) => {
 
         let plan;
 
-        // SAFE PARSE
         try {
 
             plan = JSON.parse(
@@ -214,7 +225,10 @@ router.post("/", async (req, res) => {
             });
         }
 
-        // NORMALIZE + VALIDATE
+        // ==========================================
+        // NORMALIZE PLAN
+        // ==========================================
+
         plan = normalizePlan(plan);
 
         console.log(
@@ -222,7 +236,10 @@ router.post("/", async (req, res) => {
             plan
         );
 
-        // STEP 2 → GET FILE PATH
+        // ==========================================
+        // GET FILE PATH
+        // ==========================================
+
         const filePath =
             getFilePath();
 
@@ -240,7 +257,10 @@ router.post("/", async (req, res) => {
             filePath
         );
 
-        // STEP 3 → SEND TO PYTHON
+        // ==========================================
+        // SEND TO PYTHON API
+        // ==========================================
+
         const pythonResponse =
             await fetch(
                 "https://ai-analyst-ebr8.onrender.com/analyze",
@@ -261,33 +281,77 @@ router.post("/", async (req, res) => {
                 }
             );
 
+        // ==========================================
         // HANDLE PYTHON ERRORS
+        // ==========================================
+
         if (!pythonResponse.ok) {
 
-            const errorData =
-                await pythonResponse.json();
+            const errorText =
+                await pythonResponse.text();
 
             console.log(
-                "Python Error:",
-                errorData
+                "Python Raw Error:",
+                errorText
             );
+
+            let parsedError;
+
+            try {
+
+                parsedError =
+                    JSON.parse(errorText);
+
+            } catch {
+
+                parsedError = {
+                    detail: errorText
+                };
+            }
 
             return res.status(
                 pythonResponse.status
             ).json({
 
                 error:
-                errorData.detail
-                ||
-                "Python service failed"
+                    parsedError.detail
+                    ||
+                    "Python service failed"
             });
         }
 
-        // STEP 4 → RECEIVE ANALYTICS
-        const pythonData =
-            await pythonResponse.json();
+        // ==========================================
+        // RECEIVE PYTHON DATA
+        // ==========================================
 
-        // STEP 5 → GENERATE INSIGHT
+        const responseText =
+            await pythonResponse.text();
+
+        let pythonData;
+
+        try {
+
+            pythonData =
+                JSON.parse(responseText);
+
+        } catch {
+
+            console.log(
+                "Invalid Python JSON:",
+                responseText
+            );
+
+            return res.status(500).json({
+
+                error:
+                "Python API returned invalid JSON"
+            });
+        }
+
+        // ==========================================
+        // GENERATE INSIGHT
+        // ==========================================
+
         let insight = null;
 
         try {
@@ -306,7 +370,10 @@ router.post("/", async (req, res) => {
             );
         }
 
+        // ==========================================
         // FINAL RESPONSE
+        // ==========================================
+
         res.json({
 
             plan,
@@ -327,7 +394,7 @@ router.post("/", async (req, res) => {
             error
         );
 
-        // RATE LIMIT
+        // GEMINI RATE LIMIT
         if (
             error.message &&
             error.message.includes("429")
