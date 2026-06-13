@@ -1,5 +1,9 @@
 const express = require("express");
 
+const fs = require("fs");
+
+const csv = require("csv-parser");
+
 const router = express.Router();
 
 const {
@@ -13,130 +17,395 @@ const {
 
 
 // ==========================================
-// SUPPORTED OPERATIONS
+// LOAD CSV
 // ==========================================
 
-const SUPPORTED_OPERATIONS = [
+function loadCSV(filePath) {
 
-    "trend_analysis",
+    return new Promise((resolve, reject) => {
 
-    "max_value",
+        const results = [];
 
-    "min_value",
+        fs.createReadStream(filePath)
 
-    "average",
+            .pipe(csv())
 
-    "sum",
+            .on("data", (data) => {
 
-    "count",
+                results.push(data);
+            })
 
-    "top_n",
+            .on("end", () => {
 
-    "grouped_summary"
-];
+                resolve(results);
+            })
 
+            .on("error", (error) => {
 
-// ==========================================
-// SUPPORTED CHARTS
-// ==========================================
-
-const SUPPORTED_CHARTS = [
-
-    "line",
-
-    "bar",
-
-    "pie",
-
-    "scatter",
-
-    "kpi"
-];
+                reject(error);
+            });
+    });
+}
 
 
 // ==========================================
-// NORMALIZE PLAN
+// TO NUMBER
 // ==========================================
 
-function normalizePlan(plan) {
+function toNumber(value) {
 
-    plan.limit =
-        Number(plan.limit) || 10;
+    const num = Number(value);
 
-    plan.filters =
-        plan.filters || {};
+    return isNaN(num)
+        ? null
+        : num;
+}
 
-    plan.sort_order =
-        plan.sort_order || "desc";
 
-    // INVALID OPERATION
-    if (
-        !SUPPORTED_OPERATIONS.includes(
-            plan.operation
-        )
-    ) {
+// ==========================================
+// APPLY FILTERS
+// ==========================================
 
-        plan.operation = "count";
+function applyFilters(data, filters) {
 
-        plan.metric = "*";
+    let filtered = [...data];
 
-        plan.chart_type = "kpi";
+    for (const column in filters) {
+
+        const condition = filters[column];
+
+        filtered = filtered.filter((row) => {
+
+            const value =
+                toNumber(row[column]);
+
+            // GREATER THAN
+            if (
+                condition.greater_than !== undefined
+            ) {
+
+                return (
+                    value >
+                    condition.greater_than
+                );
+            }
+
+            // LESS THAN
+            if (
+                condition.less_than !== undefined
+            ) {
+
+                return (
+                    value <
+                    condition.less_than
+                );
+            }
+
+            // BETWEEN
+            if (
+                condition.between
+            ) {
+
+                return (
+                    value >= condition.between[0]
+                    &&
+                    value <= condition.between[1]
+                );
+            }
+
+            // EQUALS
+            if (
+                condition.equals !== undefined
+            ) {
+
+                return (
+                    row[column] ==
+                    condition.equals
+                );
+            }
+
+            return true;
+        });
     }
 
-    // INVALID CHART TYPE
-    if (
-        !SUPPORTED_CHARTS.includes(
-            plan.chart_type
-        )
-    ) {
+    return filtered;
+}
 
-        if (
-            plan.operation === "count"
-            ||
-            plan.operation === "grouped_summary"
-            ||
-            plan.operation === "top_n"
-        ) {
 
-            plan.chart_type = "bar";
+// ==========================================
+// ANALYTICS ENGINE
+// ==========================================
 
-        } else {
+function executeAnalytics(data, plan) {
 
-            plan.chart_type = "kpi";
+    const {
+        operation,
+        metric,
+        group_by,
+        limit,
+        sort_order,
+        filters
+    } = plan;
+
+    // APPLY FILTERS
+    data = applyFilters(
+        data,
+        filters || {}
+    );
+
+    // EMPTY
+    if (!data.length) {
+
+        return {
+            chartData: []
+        };
+    }
+
+    // ==========================================
+    // COUNT
+    // ==========================================
+
+    if (operation === "count") {
+
+        // GROUPED COUNT
+        if (group_by) {
+
+            const grouped = {};
+
+            data.forEach((row) => {
+
+                const key =
+                    row[group_by];
+
+                grouped[key] =
+                    (grouped[key] || 0) + 1;
+            });
+
+            return {
+
+                chartData:
+                    Object.entries(grouped)
+                        .map(([key, value]) => ({
+
+                            [group_by]: key,
+
+                            count: value
+                        }))
+            };
         }
+
+        // SIMPLE COUNT
+        return {
+
+            chartData: [
+                {
+                    count: data.length
+                }
+            ]
+        };
     }
 
-    // COUNT FIX
-    if (plan.operation === "count") {
+    // NUMERIC VALUES
+    const numericData =
+        data
+            .map((row) => ({
 
-        plan.metric = "*";
+                ...row,
 
-        if (plan.group_by) {
+                [metric]:
+                    toNumber(row[metric])
+            }))
+            .filter(
+                row =>
+                    row[metric] !== null
+            );
 
-            plan.chart_type = "bar";
+    // ==========================================
+    // AVERAGE
+    // ==========================================
 
-        } else {
+    if (operation === "average") {
 
-            plan.chart_type = "kpi";
-        }
+        const avg =
+            numericData.reduce(
+
+                (sum, row) =>
+                    sum + row[metric],
+
+                0
+
+            ) / numericData.length;
+
+        return {
+
+            chartData: [
+                {
+                    average:
+                        Number(avg.toFixed(2))
+                }
+            ]
+        };
     }
 
-    // KPI FIX
+    // ==========================================
+    // SUM
+    // ==========================================
+
+    if (operation === "sum") {
+
+        const total =
+            numericData.reduce(
+
+                (sum, row) =>
+                    sum + row[metric],
+
+                0
+            );
+
+        return {
+
+            chartData: [
+                {
+                    sum:
+                        Number(total.toFixed(2))
+                }
+            ]
+        };
+    }
+
+    // ==========================================
+    // MAX VALUE
+    // ==========================================
+
+    if (operation === "max_value") {
+
+        const maxRow =
+            numericData.reduce(
+
+                (max, row) =>
+
+                    row[metric] >
+                    max[metric]
+
+                        ? row
+                        : max
+            );
+
+        return {
+
+            chartData: [maxRow]
+        };
+    }
+
+    // ==========================================
+    // MIN VALUE
+    // ==========================================
+
+    if (operation === "min_value") {
+
+        const minRow =
+            numericData.reduce(
+
+                (min, row) =>
+
+                    row[metric] <
+                    min[metric]
+
+                        ? row
+                        : min
+            );
+
+        return {
+
+            chartData: [minRow]
+        };
+    }
+
+    // ==========================================
+    // TOP N
+    // ==========================================
+
+    if (operation === "top_n") {
+
+        const sorted =
+            [...numericData].sort((a, b) => {
+
+                if (sort_order === "asc") {
+
+                    return (
+                        a[metric] -
+                        b[metric]
+                    );
+                }
+
+                return (
+                    b[metric] -
+                    a[metric]
+                );
+            });
+
+        return {
+
+            chartData:
+                sorted.slice(0, limit)
+        };
+    }
+
+    // ==========================================
+    // GROUPED SUMMARY
+    // ==========================================
+
     if (
-        [
-            "average",
-            "sum",
-            "max_value",
-            "min_value"
-        ].includes(plan.operation)
-        &&
-        !plan.group_by
+        operation === "grouped_summary"
+        ||
+        operation === "trend_analysis"
     ) {
 
-        plan.chart_type = "kpi";
+        const grouped = {};
+
+        numericData.forEach((row) => {
+
+            const key =
+                row[group_by];
+
+            if (!grouped[key]) {
+
+                grouped[key] = [];
+            }
+
+            grouped[key].push(
+                row[metric]
+            );
+        });
+
+        const result =
+            Object.entries(grouped)
+                .map(([key, values]) => ({
+
+                    [group_by]: key,
+
+                    [metric]:
+
+                        Number(
+
+                            (
+                                values.reduce(
+                                    (a, b) => a + b,
+                                    0
+                                ) / values.length
+                            ).toFixed(2)
+                        )
+                }));
+
+        return {
+
+            chartData: result
+        };
     }
 
-    return plan;
+    return {
+        chartData: []
+    };
 }
 
 
@@ -153,48 +422,23 @@ router.post("/", async (req, res) => {
             schema
         } = req.body;
 
-        // ==========================================
         // VALIDATION
-        // ==========================================
-
         if (!query) {
 
             return res.status(400).json({
 
                 error:
-                "Query is required"
+                    "Query is required"
             });
         }
 
-        if (
-            !schema
-            ||
-            !Array.isArray(schema)
-        ) {
-
-            return res.status(400).json({
-
-                error:
-                "Invalid schema"
-            });
-        }
-
-        // ==========================================
-        // GENERATE AI PLAN
-        // ==========================================
-
+        // GENERATE PLAN
         const rawResponse =
             await generateQueryPlan(
                 query,
                 schema
             );
 
-        console.log(
-            "Gemini Raw Response:",
-            rawResponse
-        );
-
-        // CLEAN RESPONSE
         const cleanedResponse =
             rawResponse
                 .replace(/```json/g, "")
@@ -205,41 +449,21 @@ router.post("/", async (req, res) => {
 
         try {
 
-            plan = JSON.parse(
-                cleanedResponse
-            );
+            plan =
+                JSON.parse(cleanedResponse);
 
-        } catch (parseError) {
-
-            console.log(
-                "JSON Parse Error:",
-                parseError.message
-            );
+        } catch {
 
             return res.status(500).json({
 
                 error:
-                "AI returned invalid JSON.",
-
-                rawResponse
+                    "AI returned invalid JSON"
             });
         }
 
-        // ==========================================
-        // NORMALIZE PLAN
-        // ==========================================
+        console.log("PLAN:", plan);
 
-        plan = normalizePlan(plan);
-
-        console.log(
-            "FINAL PLAN:",
-            plan
-        );
-
-        // ==========================================
         // GET FILE PATH
-        // ==========================================
-
         const filePath =
             getFilePath();
 
@@ -248,138 +472,44 @@ router.post("/", async (req, res) => {
             return res.status(400).json({
 
                 error:
-                "No uploaded file found."
+                    "No uploaded file found"
             });
         }
 
-        console.log(
-            "USING FILE PATH:",
-            filePath
-        );
+        // LOAD CSV
+        const csvData =
+            await loadCSV(filePath);
 
-        // ==========================================
-        // SEND TO PYTHON API
-        // ==========================================
-
-        const pythonResponse =
-            await fetch(
-                "https://ai-analyst-ebr8.onrender.com/analyze",
-                {
-                    method: "POST",
-
-                    headers: {
-                        "Content-Type":
-                        "application/json"
-                    },
-
-                    body: JSON.stringify({
-
-                        filePath,
-
-                        instructions: plan
-                    })
-                }
+        // EXECUTE ANALYTICS
+        const analytics =
+            executeAnalytics(
+                csvData,
+                plan
             );
 
-        // ==========================================
-        // HANDLE PYTHON ERRORS
-        // ==========================================
-
-        if (!pythonResponse.ok) {
-
-            const errorText =
-                await pythonResponse.text();
-
-            console.log(
-                "Python Raw Error:",
-                errorText
-            );
-
-            let parsedError;
-
-            try {
-
-                parsedError =
-                    JSON.parse(errorText);
-
-            } catch {
-
-                parsedError = {
-                    detail: errorText
-                };
-            }
-
-            return res.status(
-                pythonResponse.status
-            ).json({
-
-                error:
-                    parsedError.detail
-                    ||
-                    "Python service failed"
-            });
-        }
-
-        // ==========================================
-        // RECEIVE PYTHON DATA
-        // ==========================================
-
-        const responseText =
-            await pythonResponse.text();
-
-        let pythonData;
-
-        try {
-
-            pythonData =
-                JSON.parse(responseText);
-
-        } catch {
-
-            console.log(
-                "Invalid Python JSON:",
-                responseText
-            );
-
-            return res.status(500).json({
-
-                error:
-                "Python API returned invalid JSON"
-            });
-        }
-
-        // ==========================================
         // GENERATE INSIGHT
-        // ==========================================
-
-        let insight = null;
+        let insight = "";
 
         try {
 
             insight =
                 await generateInsight(
                     query,
-                    pythonData
+                    analytics
                 );
 
-        } catch (insightError) {
+        } catch {
 
-            console.log(
-                "Insight generation failed:",
-                insightError.message
-            );
+            insight =
+                "Insight generation failed.";
         }
 
-        // ==========================================
         // FINAL RESPONSE
-        // ==========================================
-
         res.json({
 
             plan,
 
-            analytics:
-                pythonData,
+            analytics,
 
             chartType:
                 plan.chart_type,
@@ -389,25 +519,8 @@ router.post("/", async (req, res) => {
 
     } catch (error) {
 
-        console.log(
-            "SERVER ERROR:",
-            error
-        );
+        console.log(error);
 
-        // GEMINI RATE LIMIT
-        if (
-            error.message &&
-            error.message.includes("429")
-        ) {
-
-            return res.status(429).json({
-
-                error:
-                "AI servers are busy. Please wait and try again."
-            });
-        }
-
-        // GENERIC ERROR
         res.status(500).json({
 
             error:
