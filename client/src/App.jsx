@@ -21,6 +21,9 @@ function App() {
 
     const [loading, setLoading] = useState(false);
 
+    const [loadingText, setLoadingText] =
+        useState("Analyzing dataset...");
+
     const [queryHistory, setQueryHistory] =
         useState([]);
 
@@ -30,7 +33,17 @@ function App() {
 
     const handleUpload = async () => {
 
+        if (!file) {
+            return alert("Please select a CSV file");
+        }
+
         try {
+
+            setLoading(true);
+
+            setLoadingText(
+                "Uploading dataset..."
+            );
 
             const formData = new FormData();
 
@@ -60,6 +73,10 @@ function App() {
             console.log(error);
 
             alert("Upload Failed");
+
+        } finally {
+
+            setLoading(false);
         }
     };
 
@@ -69,9 +86,33 @@ function App() {
 
     const handleAsk = async () => {
 
+        if (!query.trim()) {
+            return;
+        }
+
         try {
 
             setLoading(true);
+
+            setLoadingText(
+                "Understanding your query..."
+            );
+
+            setTimeout(() => {
+
+                setLoadingText(
+                    "Analyzing dataset..."
+                );
+
+            }, 1200);
+
+            setTimeout(() => {
+
+                setLoadingText(
+                    "Generating AI insights..."
+                );
+
+            }, 2500);
 
             const res = await fetch(
                 "https://ai-analyst-1-rqou.onrender.com/ask",
@@ -190,7 +231,7 @@ function App() {
                                                     key={index}
                                                     className="schema-tag"
                                                 >
-                                                    {col.column}
+                                                    {col.name}
                                                 </span>
                                             )
                                         )
@@ -245,23 +286,6 @@ function App() {
             {/* MAIN CONTENT */}
 
             <main className="main-content">
-
-                {/* LOADING */}
-
-                {
-                    loading && (
-
-                        <div className="loading-card">
-
-                            <div className="loader"></div>
-
-                            <p>
-                                Analyzing dataset...
-                            </p>
-
-                        </div>
-                    )
-                }
 
                 {/* EMPTY STATE */}
 
@@ -349,6 +373,31 @@ function App() {
                 }
 
             </main>
+
+            {/* FULLSCREEN LOADING */}
+
+            {
+                loading && (
+
+                    <div className="loading-overlay">
+
+                        <div className="loading-modal">
+
+                            <div className="loading-spinner"></div>
+
+                            <h2>
+                                AI Data Analyst
+                            </h2>
+
+                            <p>
+                                {loadingText}
+                            </p>
+
+                        </div>
+
+                    </div>
+                )
+            }
 
         </div>
     );
